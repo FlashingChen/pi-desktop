@@ -1,0 +1,14 @@
+# Xcode / SwiftPM
+.build/
+build/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# Local-only working material (see AGENTS.md)
+AGENTS.md
+.impeccable/
+design/
+design-demos/
+perf/
