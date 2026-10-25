@@ -16,6 +16,17 @@ struct ExecutionRecord: Identifiable {
         case .bash: return "bash"
         }
     }
+    var summary: String {
+        switch kind {
+        case .tool(let call, _):
+            let args=call?["arguments"] as? [String:Any] ?? [:]
+            let value=(args["command"] as? String) ?? (args["path"] as? String) ?? (args["file_path"] as? String) ?? (args["filePath"] as? String) ?? ""
+            return String((value.split(separator:"\n",maxSplits:1,omittingEmptySubsequences:true).first ?? "").prefix(180)).trimmingCharacters(in:.whitespaces)
+        case .bash(let message): return String((message.raw["command"] as? String ?? "").split(separator:"\n").first ?? "")
+        case .thinking: return ""
+        }
+    }
+
 }
 
 func executionRecords(_ messages: [DisplayMessage]) -> [ExecutionRecord] {
@@ -59,13 +70,14 @@ struct ExecutionRecordRow: View {
     let record: ExecutionRecord
     let done: Bool
     var body: some View {
+        Group {
         switch record.kind {
         case .thinking(let messages):
             DisclosureGroup {
                 MarkdownText(text: messages.flatMap { $0.blocks }.compactMap { $0["thinking"] as? String }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
                     .padding(.top, 6)
             } label: { Text("思考过程").font(.system(size: 12, weight: .medium)) }
-                .padding(.horizontal, 12).padding(.vertical, 5)
+                .padding(.horizontal, 5).padding(.vertical, 2)
         case .tool(let call, let result):
             DisclosureGroup {
                 if let arguments = call?["arguments"], let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.prettyPrinted, .sortedKeys]), let text = String(data: data, encoding: .utf8) {
@@ -76,18 +88,20 @@ struct ExecutionRecordRow: View {
                 HStack(spacing: 7) {
                     Image(systemName: result == nil ? "circle.dotted" : result?.raw["isError"] as? Bool == true ? "exclamationmark.circle" : "checkmark")
                         .font(.system(size: 11)).foregroundStyle(result?.raw["isError"] as? Bool == true ? Color.red : result == nil ? Theme.secondary : Theme.success)
-                    Text(record.label).font(.system(size: 12, design: .monospaced))
+                    Text(record.label).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.secondary).frame(minWidth:32,alignment:.leading)
+                    if !record.summary.isEmpty { Text(record.summary).font(.system(size:12)).lineLimit(1).truncationMode(.middle) }
                     if result == nil { Text(done ? "未记录结果" : "运行中").font(.system(size: 11)).foregroundStyle(Theme.secondary) }
                 }
-            }.padding(.horizontal, 12).padding(.vertical, 5)
+            }.padding(.horizontal, 5).padding(.vertical, 2)
         case .bash(let message):
             DisclosureGroup {
                 executionText(message.raw["output"] as? String ?? "", title: "输出")
             } label: {
                 Label(message.raw["command"] as? String ?? "Bash", systemImage: "terminal")
                     .font(.system(size: 12, design: .monospaced)).lineLimit(1)
-            }.padding(.horizontal, 12).padding(.vertical, 5)
+            }.padding(.horizontal, 5).padding(.vertical, 2)
         }
+        }.disclosureGroupStyle(ExecutionDisclosureStyle())
     }
     private func executionText(_ text: String, title: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -100,5 +114,20 @@ struct ExecutionRecordRow: View {
             Text(String(text.prefix(16_000))).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
             if text.count > 16_000 { Text("仅预览前 16,000 字符，可复制完整\(title)").font(.system(size: 11)).foregroundStyle(Theme.secondary) }
         }.padding(.vertical, 5)
+    }
+}
+
+private struct ExecutionDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration:Configuration)->some View {
+        VStack(alignment:.leading,spacing:3) {
+            Button { configuration.isExpanded.toggle() } label: {
+                HStack(spacing:8) {
+                    Image(systemName:"chevron.right").font(.system(size:8)).rotationEffect(.degrees(configuration.isExpanded ? 90 : 0)).foregroundStyle(Theme.secondary)
+                    configuration.label
+                    Spacer(minLength:0)
+                }.frame(minHeight:28).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityValue(configuration.isExpanded ? "已展开" : "已折叠")
+            if configuration.isExpanded { configuration.content.padding(.leading,18) }
+        }
     }
 }

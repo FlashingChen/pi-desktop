@@ -153,6 +153,7 @@ struct PiEnvironment {
     let executable: String
     let variables: [String: String]
     @MainActor private static var cache: [String: PiEnvironment] = [:]
+    @MainActor static func invalidate(override: String) { cache.removeValue(forKey: override) }
     @MainActor static func resolve(override: String = "") async throws -> PiEnvironment {
         if let cached = cache[override] { return cached }
         let resolved: PiEnvironment = try await Task.detached {
@@ -190,6 +191,29 @@ struct PiEnvironment {
         }.value
         cache[override] = resolved
         return resolved
+    }
+}
+
+struct SkillInvocation {
+    let name:String
+    let request:String
+    let content:String
+    static func parse(_ text:String)->SkillInvocation? {
+        let text=text.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard text.hasPrefix("<skill "),let start=text.range(of:"name=\""),let end=text[start.upperBound...].firstIndex(of:"\""),let close=text.range(of:"</skill>") else { return nil }
+        return .init(name:String(text[start.upperBound..<end]),request:text[close.upperBound...].trimmingCharacters(in:.whitespacesAndNewlines),content:String(text[..<close.upperBound]))
+    }
+}
+
+enum SessionTitle {
+    static func fromPrompt(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("<skill "), let marker = trimmed.range(of: "name=\""),
+              let end = trimmed[marker.upperBound...].firstIndex(of: "\"") else { return trimmed }
+        let skill = String(trimmed[marker.upperBound..<end])
+        guard let close = trimmed.range(of: "</skill>") else { return "/skill:" + skill }
+        let request = trimmed[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return request.isEmpty ? "/skill:" + skill : request
     }
 }
 
@@ -237,7 +261,7 @@ enum SessionIndex {
                         firstMessage = DisplayMessage.from(message, index: 0).text
                     }
                 }
-                let title = [name, firstMessage].compactMap { $0 }.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? "未命名会话"
+                let title = [name, firstMessage.map(SessionTitle.fromPrompt)].compactMap { $0 }.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? "未命名会话"
                 let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 result.append(PiSession(path: file.path, title: String(title.prefix(100)), date: date))
             }

@@ -38,6 +38,8 @@ struct PiMark: View {
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     @State private var sidebarVisible = false
+    @State private var sidebarSection = "sessions"
+    @State private var filePreview:FilePreviewRequest?
     @State private var expanded: Set<String> = []
     @State private var searchVisible = false
     @FocusState private var searchFocused: Bool
@@ -59,6 +61,8 @@ struct RootView: View {
         .task { expanded = Set(model.projects.map(\.id)); await model.boot() }
         .onChange(of: model.project) { _, project in if let project { expanded.insert(project.id) } }
         .sheet(isPresented: $model.showSettings) { SettingsView().environmentObject(model) }
+        .sheet(item: $model.renameTarget) { _ in RenameSessionView().environmentObject(model) }
+        .sheet(item: $filePreview) { WorkspaceFilePreview(url:$0.url) }
         .sheet(isPresented: $model.showCommands) { CommandsView().environmentObject(model) }
         .sheet(isPresented: $model.forkSheetVisible) { ForkPickerView().environmentObject(model) }
         .sheet(isPresented: $model.showCompactSheet) { CompactView().environmentObject(model) }
@@ -68,7 +72,7 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .piSearch)) { _ in focusSearch() }
     }
     private func focusSearch() {
-        sidebarVisible = true; searchVisible = true
+        sidebarVisible = true; sidebarSection = "sessions"; searchVisible = true
         DispatchQueue.main.async { searchFocused = true }
     }
     private var mainCard: some View {
@@ -96,6 +100,11 @@ struct RootView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) { PiMark(size: 23); Text("Pi").font(.system(size: 17, weight: .semibold)) }.padding(.horizontal, 20).padding(.top, 54).padding(.bottom, 20)
+            Picker("侧栏",selection:$sidebarSection) {
+                Text("会话").tag("sessions")
+                Text("文件").tag("files")
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal,14).padding(.bottom,13)
+            if sidebarSection == "sessions" {
             navButton("新会话", icon: "square.and.pencil", shortcut: "⌘ N") { Task { await model.newSession() } }
             navButton("搜索会话", icon: "magnifyingglass", shortcut: "⌘ K") { focusSearch() }
             if searchVisible { TextField("搜索会话…", text: $model.search).focused($searchFocused).onExitCommand { model.search = ""; searchVisible = false }.textFieldStyle(.roundedBorder).font(.system(size: 12)).padding(.horizontal, 17).padding(.top, 7) }
@@ -123,6 +132,10 @@ struct RootView: View {
                                             }.font(.system(size: 12)).foregroundStyle(model.sessionPath == session.path ? Theme.text : Theme.secondary).padding(.horizontal, 9).frame(height: 28).frame(maxWidth: .infinity, alignment: .leading)
                                                 .contentShape(Rectangle())
                                         }.buttonStyle(PiButtonStyle(kind: .row, selected: model.sessionPath == session.path, horizontalPadding: 0, verticalPadding: 0)).help(session.title)
+                                            .contextMenu {
+                                                Button("重命名…") { Task { await model.requestRename(session,in:project) } }
+                                                Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath:session.path)]) }
+                                            }
                                     }
                                     if (model.sessions[project.id] ?? []).isEmpty {
                                         Text("还没有会话").font(.system(size: 11)).foregroundStyle(Theme.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 9).padding(.vertical, 7)
@@ -132,6 +145,11 @@ struct RootView: View {
                         }
                     }
                 }.padding(.horizontal, 11)
+            }
+            } else if let project=model.project {
+                WorkspaceFileBrowser(root:URL(fileURLWithPath:project.path),preview:{ filePreview=FilePreviewRequest(url:$0) })
+            } else {
+                Text("先打开一个项目").font(.system(size:12)).foregroundStyle(Theme.secondary).padding(18)
             }
             Spacer(minLength: 10)
             Rectangle().fill(Theme.line).frame(height: 0.5).padding(.horizontal, 10)
@@ -155,6 +173,9 @@ struct RootView: View {
                 .help(sidebarVisible ? "收起会话列表" : "显示会话列表 · ⌘ K 搜索")
                 .accessibilityLabel("切换会话列表")
             projectTabs
+            Button { sidebarVisible=true;sidebarSection="files" } label: {
+                Image(systemName:"folder").frame(width:24,height:28)
+            }.buttonStyle(PiButtonStyle(horizontalPadding:3,verticalPadding:0)).help("项目文件").accessibilityLabel("项目文件")
             if model.connecting { ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 16) }
             Button { Task { await model.newSession() } } label: {
                 Image(systemName: "square.and.pencil").frame(width: 24, height: 28)
@@ -166,6 +187,7 @@ struct RootView: View {
                 .help("运行原版 Pi，使用所有交互式命令和 TUI 扩展")
             Menu {
                 Button("重命名会话…") { model.renameSession() }.disabled(!model.connected)
+                Button("模型配置…") { model.openModelSettings() }
                 Divider()
                 Button("从历史消息创建分支…") { model.showForkPicker() }.disabled(!model.connected)
                 Button("克隆为新会话") { Task { await model.cloneSession() } }.disabled(!model.connected)
@@ -360,39 +382,82 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearance = "dark"
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
+    @State private var executable=""
+    @State private var directory=""
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("设置").font(.system(size: 20, weight: .semibold))
+        VStack(alignment:.leading,spacing:16) {
             HStack {
-                Text("外观").font(.system(size: 12, weight: .medium))
-                Spacer()
-                Picker("外观", selection: $appearance) {
-                    Text("深色").tag("dark")
-                    Text("浅色").tag("light")
-                    Text("跟随系统").tag("system")
-                }.labelsHidden().pickerStyle(.segmented).frame(width: 260)
+                Text("设置").font(.system(size:20,weight:.semibold));Spacer()
+                if model.busy { Label("Agent 正在后台运行",systemImage:"circle.fill").font(.system(size:11)).foregroundStyle(Theme.secondary) }
+                Button("关闭") { dismiss() }
             }
-            VStack(alignment: .leading, spacing: 7) {
-                Text("Pi CLI 可执行文件").font(.system(size: 12, weight: .medium))
+            Picker("设置分类",selection:$model.settingsSection) {
+                Text("通用").tag("general");Text("模型").tag("models")
+            }.pickerStyle(.segmented).labelsHidden()
+            if !model.dialogs.isEmpty {
                 HStack {
-                    TextField("自动从登录 Shell 的 PATH 查找", text: $model.executableOverride).textFieldStyle(.roundedBorder)
-                    Button("选择…") { let panel = NSOpenPanel(); if panel.runModal() == .OK, let url = panel.url { model.executableOverride = url.path } }
+                    Text("Pi 正在等待你的确认或输入").font(.system(size:12)).foregroundStyle(Theme.secondary)
+                    Spacer();Button("返回处理") { model.showSettings=false }
                 }
-                Text("使用已安装的原版 Pi；启动时读取登录 Shell 环境。").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 7) {
-                Text("自定义会话目录（可选）").font(.system(size: 12, weight: .medium))
-                TextField("留空以遵循 Pi 的配置与环境变量", text: $model.sessionDirectory).textFieldStyle(.roundedBorder)
-                Text("填写后作为 Pi 的 --session-dir 参数传入，不复制或迁移任何会话。").font(.system(size: 11)).foregroundStyle(.secondary)
+            if model.settingsSection == "models" {
+                ScrollView { ModelConfigurationView().environmentObject(model).padding(.trailing,5) }.frame(height:470)
+            } else {
+                VStack(alignment:.leading,spacing:20) {
+                    HStack {
+                        Text("外观").font(.system(size:12,weight:.medium));Spacer()
+                        Picker("外观",selection:$appearance) {
+                            Text("深色").tag("dark");Text("浅色").tag("light");Text("跟随系统").tag("system")
+                        }.labelsHidden().pickerStyle(.segmented).frame(width:260)
+                    }
+                    VStack(alignment:.leading,spacing:7) {
+                        Text("Pi CLI 可执行文件").font(.system(size:12,weight:.medium))
+                        TextField("自动从登录 Shell 的 PATH 查找",text:$executable).textFieldStyle(.roundedBorder)
+                    }
+                    VStack(alignment:.leading,spacing:7) {
+                        Text("自定义会话目录（可选）").font(.system(size:12,weight:.medium))
+                        TextField("留空以遵循 Pi 的配置",text:$directory).textFieldStyle(.roundedBorder)
+                    }
+                    Text("连接配置在下次连接时生效。打开或保存设置不会中断当前任务。")
+                        .font(.system(size:12)).foregroundStyle(Theme.secondary)
+                    HStack {
+                        Button("打开 Pi 配置目录") { NSWorkspace.shared.open(model.agentDirectory) }
+                        Spacer()
+                        Button("保存") {
+                            model.executableOverride=executable;model.sessionDirectory=directory
+                            Task { await model.saveSettings() }
+                        }.buttonStyle(PiButtonStyle(kind:.accent))
+                    }
+                }.padding(.vertical,6)
             }
+        }.padding(24).frame(width:640)
+            .onAppear { executable=model.executableOverride;directory=model.sessionDirectory }
+    }
+}
+
+struct RenameSessionView:View {
+    @EnvironmentObject var model:AppModel
+    @State private var name=""
+    @State private var error:String?
+    @State private var saving=false
+    var body:some View {
+        VStack(alignment:.leading,spacing:16) {
+            Text("重命名会话").font(.system(size:18,weight:.semibold))
+            TextField("会话名称",text:$name).textFieldStyle(.roundedBorder).onSubmit { save() }
+            if let error { Text(error).font(.system(size:12)).foregroundStyle(.red) }
             HStack {
-                Button("打开 Pi 配置目录") {
-                    let root = model.environment?.variables["PI_CODING_AGENT_DIR"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent").path
-                    NSWorkspace.shared.open(URL(fileURLWithPath: NSString(string: root).expandingTildeInPath))
-                }
-                Spacer(); Button("关闭") { dismiss() }; Button("保存并重连") { Task { await model.saveSettings() } }.buttonStyle(.borderedProminent).tint(Theme.accent).disabled(!model.canSwitch)
+                Spacer();Button("取消") { model.renameTarget=nil }.disabled(saving)
+                Button("保存") { save() }.buttonStyle(PiButtonStyle(kind:.accent)).disabled(saving || name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
             }
-        }.padding(28).frame(width: 550)
+        }.padding(24).frame(width:400).onAppear { name=model.renameTarget?.title ?? model.sessionName }
+    }
+    private func save() {
+        guard !saving else { return };saving=true
+        Task {
+            do { try await model.saveSessionName(name) }
+            catch { self.error=error.localizedDescription }
+            saving=false
+        }
     }
 }
 struct CommandsView: View {

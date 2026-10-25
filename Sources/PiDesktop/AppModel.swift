@@ -26,8 +26,9 @@ final class AppModel: ObservableObject {
     @Published var commandsError: String?
     private var commandRequest = UUID()
     @Published var attachments: [ImageAttachment] = []
-    @Published var busy = false
-    @Published var bashRunning = false
+    let runActivity = RunActivity()
+    @Published var busy = false { didSet { runActivity.update(running: busy || bashRunning) } }
+    @Published var bashRunning = false { didSet { runActivity.update(running: busy || bashRunning) } }
     private var bashMessageIndex: Int?
     @Published var connecting = false
     @Published var connected = false
@@ -38,6 +39,8 @@ final class AppModel: ObservableObject {
     @Published var dialogs: [ExtensionDialog] = []
     @Published var terminal: TerminalSession?
     @Published var showSettings = false
+    @Published var settingsSection = "general"
+    @Published var renameTarget: PiSession?
     @Published var showCommands = false
     @Published var search = ""
     @Published var statistics = ""
@@ -70,7 +73,7 @@ final class AppModel: ObservableObject {
         connection.onEvent = { [weak self] in self?.event($0) }
         connection.onExit = { [weak self] reason in
             guard let self, !self.shuttingDown else { return }
-            self.connected = false; self.busy = false
+            self.connected = false; self.busy = false; self.bashRunning = false
             self.error = reason?.isEmpty == false ? reason : "Pi CLI 已退出。点击重连可继续会话。"
         }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
@@ -124,7 +127,7 @@ final class AppModel: ObservableObject {
     func selectProject(_ item: Project, session: String? = nil) async {
         guard terminal == nil else { return }
         if connecting { pendingIntent = .selectProject(item, session) ; return }
-        if busy { await abort() }
+        guard !busy else { status = "当前任务继续运行；完成或手动中止后可切换会话。"; return }
         saveDraft()
         metadataGeneration = UUID(); metadataTask?.cancel()
         connecting = true
@@ -163,8 +166,9 @@ final class AppModel: ObservableObject {
     }
     func reconnect() async {
         if connecting { return }
-        if busy { await abort() }
+        guard !busy else { status = "当前任务继续运行；完成或手动中止后可切换会话。"; return }
         guard terminal == nil else { return }
+        PiEnvironment.invalidate(override:executableOverride)
         if let item = project { await selectProject(item, session: sessionPath) }
     }
     func refreshSessions() async {
@@ -201,7 +205,7 @@ final class AppModel: ObservableObject {
     func newSession() async {
         guard terminal == nil else { return }
         if connecting { pendingIntent = .newSession; return }
-        if busy { await abort() }
+        guard !busy else { status = "当前任务继续运行；完成或手动中止后可切换会话。"; return }
         guard connected else { if let item = project { await selectProject(item) }; return }
         saveDraft()
         metadataGeneration = UUID(); metadataTask?.cancel()
@@ -215,7 +219,7 @@ final class AppModel: ObservableObject {
     func switchSession(_ session: PiSession, in item: Project) async {
         guard terminal == nil else { return }
         if connecting { pendingIntent = .selectProject(item, session.path); return }
-        if busy { await abort() }
+        guard !busy else { status = "当前任务继续运行；完成或手动中止后可切换会话。"; return }
         if project != item { await selectProject(item, session: session.path); return }
         saveDraft()
         metadataGeneration = UUID(); metadataTask?.cancel()
@@ -347,12 +351,33 @@ final class AppModel: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
     func renameSession() {
-        guard canSwitch, connected else { return }
-        let alert = NSAlert(); alert.messageText = "重命名会话"; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")
-        let field = NSTextField(string: sessionName == "新会话" ? "" : sessionName); field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
-        alert.accessoryView = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        Task { do { _ = try await connection.request("set_session_name", ["name": field.stringValue]); try await syncAll(); await refreshSessions() } catch { self.error = error.localizedDescription } }
+        guard let path = sessionPath else { return }
+        renameTarget = PiSession(path: path, title: sessionName, date: Date())
+    }
+    func requestRename(_ session:PiSession,in project:Project) async {
+        if sessionPath != session.path || self.project != project {
+            guard canSwitch else { status="当前任务继续运行，完成后可重命名其他会话。";return }
+            await switchSession(session,in:project)
+        }
+        guard sessionPath == session.path else { return }
+        renameTarget=PiSession(path:session.path,title:sessions[project.id]?.first(where:{$0.path == session.path})?.title ?? session.title,date:session.date)
+    }
+    func saveSessionName(_ name: String) async throws {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw PiError.message("请输入会话名称。") }
+        guard let target = renameTarget, target.path == sessionPath, connected else {
+            throw PiError.message("请先打开需要重命名的会话。")
+        }
+        _ = try await connection.request("set_session_name", ["name": name])
+        sessionName = name
+        if let id = project?.id, let index = sessions[id]?.firstIndex(where: { $0.path == target.path }) { sessions[id]?[index].title = name }
+        renameTarget = nil
+        Task { await refreshSessions() }
+    }
+    func openModelSettings() { settingsSection = "models"; showSettings = true }
+    var agentDirectory: URL {
+        let path = environment?.variables["PI_CODING_AGENT_DIR"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent").path
+        return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
     }
 
     // MARK: - 会话分支与维护（全部走官方 RPC）
@@ -366,7 +391,7 @@ final class AppModel: ObservableObject {
 
     /// 从历史用户消息创建分支（/fork）。
     func forkFrom(_ point: ForkPoint) async {
-        if busy { await abort() }
+        guard !busy else { status = "当前任务继续运行；完成或手动中止后可切换会话。"; return }
         do {
             let result = try await connection.request("fork", ["entryId": point.entryId], timeout: 120)
             if result["cancelled"] as? Bool == true { status = "Pi Extension 取消了分支。"; return }
@@ -393,7 +418,7 @@ final class AppModel: ObservableObject {
 
     /// 克隆当前分支为新会话（/clone）。
     func cloneSession() async {
-        if busy { await abort() }
+        guard !busy else { status = "当前任务继续运行；完成或手动中止后可切换会话。"; return }
         do {
             let result = try await connection.request("clone", [:], timeout: 120)
             if result["cancelled"] as? Bool == true { status = "Pi Extension 取消了克隆。"; return }
@@ -563,15 +588,14 @@ final class AppModel: ObservableObject {
         }
     }
     func saveSettings() async {
-        guard canSwitch else { return }
         UserDefaults.standard.set(executableOverride, forKey: "piExecutable")
         UserDefaults.standard.set(sessionDirectory, forKey: "sessionDirectory")
+        PiEnvironment.invalidate(override:executableOverride)
         showSettings = false
-        if let project { await selectProject(project, session: sessionPath) }
-        else { do { environment = try await PiEnvironment.resolve(override: executableOverride); error = nil } catch { self.error = error.localizedDescription } }
+        status = busy ? "设置已保存，当前任务继续运行；连接配置下次生效。" : "设置已保存，下次连接时生效。"
     }
     func shutdown() async {
-        shuttingDown = true; refreshTimer?.invalidate(); metadataTask?.cancel()
+        shuttingDown = true; refreshTimer?.invalidate(); metadataTask?.cancel(); runActivity.update(running: false)
         if let terminal { await terminal.stop() }
         await connection.stop()
     }

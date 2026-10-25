@@ -232,7 +232,10 @@ struct ModelPicker: View {
     var filtered: [PiModel] { model.models.filter { query.isEmpty || ($0.name + $0.provider + $0.modelID).localizedCaseInsensitiveContains(query) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("搜索 Pi 已配置的模型", text: $query).textFieldStyle(.roundedBorder)
+            HStack {
+                TextField("搜索 Pi 已配置的模型", text: $query).textFieldStyle(.roundedBorder)
+                Button { dismiss();model.openModelSettings() } label: { Image(systemName:"gearshape") }.buttonStyle(PiButtonStyle()).help("模型配置")
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(filtered) { item in

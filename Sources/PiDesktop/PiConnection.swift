@@ -11,11 +11,13 @@ final class PiConnection {
     var onEvent: (([String: Any]) -> Void)?
     var onExit: ((String?) -> Void)?
     var running: Bool { process?.isRunning == true }
+    var processIdentifier: Int32? { process?.processIdentifier }
 
     func start(environment: PiEnvironment, cwd: String, session: String?, continueRecent: Bool, sessionDirectory: String) throws {
         guard process == nil else { throw PiError.message("Pi 进程尚未退出。") }
         let child = Process(), stdin = Pipe(), stdout = Pipe(), stderr = Pipe(), decoder = JSONLDecoder()
         let token = UUID(); generation = token; diagnostics = ""
+        child.qualityOfService = .userInitiated
         child.executableURL = URL(fileURLWithPath: environment.executable)
         var args = ["--mode", "rpc"]
         if let session { args += ["--session", session] } else if continueRecent { args += ["--continue"] }

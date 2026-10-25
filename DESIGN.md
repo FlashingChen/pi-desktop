@@ -87,3 +87,20 @@ The JSONL decoder scans each newly received byte once; it never rescans the full
 Native layout tests render the actual SwiftUI/AppKit tree with synthetic fixture data at 1280 × 800 and 820 × 640 in both appearances, including command completion and the welcome state. These are layout evidence, not provider output or full accessibility certification. Core, native input, hover, draft, session-cancellation and large-history tests pass. The original Pi smoke test makes no model request.
 
 The build artifact is `build/Pi Desktop.app`. Packaging uses local ad hoc signing and is not notarized. Original CLI access covers Pi's interactive commands and extension TUI limitations.
+
+
+## Workspace panels and model configuration
+
+The sidebar offers Sessions and Files. Folder contents load on demand, directories sort first, hidden files are optional, and symlink ancestry prevents cycles. File preview is read-only, uses a selectable native text view, and bounds the preview to 256 KB. Full files remain available through the default application. File browsing never changes the Pi connection.
+
+Session rename is available from the conversation context menu and toolbar menu. The asynchronous sheet uses Pi's set_session_name RPC and updates sidebar metadata without resynchronizing or restarting the run. An inactive conversation can be selected for rename while idle. Expanded skill prompts have compact invocation presentation and derive list titles from the actual request or skill invocation; raw history remains untouched.
+
+The model picker links to Settings / Models. The editor reads and writes Pi's original models.json, supports compatible API formats, provider credentials, model IDs, context/output limits, reasoning and image input. Credentials are masked and an empty credential field retains the original value. Unedited providers, other models and advanced metadata remain intact. External file changes are detected before saving, and credential-bearing files use private permissions. OAuth stays in the original Pi CLI. Saving does not restart a task; an explicit reload is available while idle.
+
+Execution rows show a bounded command or file summary beside the tool name. An expanded group initially shows the latest operations with an explicit show-all control, keeping all records accessible. Child disclosures use compact rows without full-width hover bands.
+
+## Run lifetime
+
+Window focus and auxiliary panels do not own the RPC process lifetime. A user-initiated activity assertion keeps active work responsive in the background while permitting idle system sleep. The process uses user-initiated QoS. Saving shell settings only persists connection preferences; it does not reconnect. Session changes, reconnect and new-session actions refuse to abort an active run implicitly. Stop remains the explicit interruption action. Settings surfaces any pending extension confirmation so the user can return to answer it.
+
+Tests exercise continuous process output while settings are open, focus notifications change, preferences save and the active conversation is renamed. The process identifier remains stable and no abort is sent. Tests also cover native model-file preservation and permissions, external-edit detection, original-Pi custom-model discovery, file ordering/hidden-state/Unicode preview, and skill title projection. Native layout fixtures cover the new panels and compact execution rows.

@@ -102,20 +102,26 @@ struct ExecutionGroup: View {
     let messages: [DisplayMessage]
     let done: Bool
     @State private var expanded = false
+    @State private var showAllSteps = false
     @State private var hovering = false
     @EnvironmentObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    init(messages:[DisplayMessage],done:Bool,initiallyExpanded:Bool=false) {
+        self.messages=messages;self.done=done;_expanded=State(initialValue:initiallyExpanded)
+    }
     private var records: [ExecutionRecord] { executionRecords(messages) }
     private var labels: [String] { records.map(\.label) }
+    private var visibleRecords:[ExecutionRecord] {
+        guard !showAllSteps,records.count > 7 else { return records }
+        let thought=records.filter { if case .thinking = $0.kind { return true };return false }
+        let tools=records.filter { if case .thinking = $0.kind { return false };return true }
+        return thought + tools.suffix(5)
+    }
     var summary: String {
-        let names = labels
-        let uniq = names.reduce(into: [String]()) { acc, name in
-            guard acc.last != name else { return }
-            acc.append(name)
-        }
-        let head = uniq.prefix(3).joined(separator: " · ")
-        return labels.count > 3 ? head + " 等 \(labels.count) 步" : head
+        var seen:Set<String>=[]
+        let names=labels.filter { seen.insert($0).inserted }
+        return names.prefix(3).joined(separator:" · ") + (names.count > 3 ? "…" : "")
     }
 
     var body: some View {
@@ -153,8 +159,12 @@ struct ExecutionGroup: View {
             .accessibilityValue(expanded ? "已展开" : "已折叠")
             if expanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(records) { record in
+                    ForEach(visibleRecords) { record in
                         ExecutionRecordRow(record: record, done: done)
+                    }
+                    if records.count > 7 {
+                        Button(showAllSteps ? "收起较早的操作" : "显示全部 \(records.count) 项（当前仅显示最近操作）") { showAllSteps.toggle() }
+                            .font(.system(size:11)).foregroundStyle(Theme.secondary).buttonStyle(.plain).padding(.leading,21).padding(.vertical,7)
                     }
                 }
                 .padding(.top, 6)
@@ -293,7 +303,9 @@ struct MessageRow: View {
     @ViewBuilder var content: some View {
         ForEach(Array(message.blocks.enumerated()), id: \.offset) { _, block in
             switch block["type"] as? String ?? "" {
-            case "text": MarkdownText(text: block["text"] as? String ?? "")
+            case "text":
+                if message.role == "user",let invocation=SkillInvocation.parse(block["text"] as? String ?? "") { SkillInvocationView(invocation:invocation) }
+                else { MarkdownText(text: block["text"] as? String ?? "") }
             case "thinking": EmptyView()
             case "toolCall": EmptyView()
             case "image":
@@ -308,5 +320,21 @@ struct MessageRow: View {
     private func jsonString(_ value: Any) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]), let text = String(data: data, encoding: .utf8) else { return String(describing: value) }
         return text
+    }
+}
+
+private struct SkillInvocationView:View {
+    let invocation:SkillInvocation
+    var body:some View {
+        VStack(alignment:.leading,spacing:8) {
+            Label("/skill:" + invocation.name,systemImage:"doc.text").font(.system(size:12,weight:.medium)).foregroundStyle(Theme.secondary)
+            if !invocation.request.isEmpty { MarkdownText(text:invocation.request) }
+            DisclosureGroup {
+                VStack(alignment:.leading,spacing:6) {
+                    HStack { Text("Skill 原始内容").font(.system(size:11));Spacer();CopyControl(text:invocation.content,help:"复制完整 Skill 内容") }
+                    Text(String(invocation.content.prefix(16000))).font(.system(size:11,design:.monospaced)).textSelection(.enabled)
+                }
+            } label: { Text("查看 Skill 内容").font(.system(size:11)) }
+        }
     }
 }

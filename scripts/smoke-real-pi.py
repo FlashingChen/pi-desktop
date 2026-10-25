@@ -10,6 +10,8 @@ with tempfile.TemporaryDirectory(prefix='pi-desktop-smoke-') as directory:
     project.mkdir()
     agent = root / 'agent'
     agent.mkdir()
+    # Offline-compatible custom model metadata; never submit a provider prompt.
+    (agent / 'models.json').write_text(json.dumps({'providers':{'desktop-config-fixture':{'baseUrl':'http://localhost','api':'openai-completions','apiKey':'fixture-not-a-real-key','models':[{'id':'desktop-custom-model','name':'Desktop custom model','contextWindow':32000,'maxTokens':4096}]}}}))
     sessions = root / 'sessions'
     sessions.mkdir()
     session = sessions / 'fixture.jsonl'
@@ -60,7 +62,8 @@ with tempfile.TemporaryDirectory(prefix='pi-desktop-smoke-') as directory:
         assert handled.get('disposition') == 'handled'
         request('set_session_name', name='Native shared session')
         assert request('get_state')['sessionName']=='Native shared session'
-        assert request('get_available_models').get('models') is not None
+        available = request('get_available_models').get('models') or []
+        assert any(m.get('id')=='desktop-custom-model' and m.get('provider')=='desktop-config-fixture' for m in available), 'Pi must discover the native custom model configuration'
         # Graceful handoff: no second process is launched until the first has exited.
         p.stdin.close(); p.wait(timeout=20)
         assert p.returncode == 0
