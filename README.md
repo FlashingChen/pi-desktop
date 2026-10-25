@@ -1,5 +1,7 @@
 # Pi Desktop
 
+[![CI](https://github.com/FlashingChen/pi-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/FlashingChen/pi-desktop/actions/workflows/ci.yml)
+
 原生 macOS 桌面客户端，使用 SwiftUI + AppKit，为已安装的原版 [Pi](https://github.com/earendil-works/pi) 提供图形外壳。
 
 Pi Desktop 启动机器上已安装的原版 `pi` 可执行文件；不复制、不修改 Agent、模型实现、工具实现或原生会话。GUI 不直接调用任何模型 API，也不建立第二套对话数据库。
@@ -12,7 +14,21 @@ Pi Desktop 启动机器上已安装的原版 `pi` 可执行文件；不复制、
 
 应用使用登录 Shell 环境查找 `pi` 与运行时，因此支持通过 Homebrew、nvm 或其他 PATH 管理方式安装的 Pi。自动查找失败时，可在设置中选择可执行文件。Pi 的模型凭据由 Pi 自行读取；兼容接口可在 **设置 → 模型** 中配置，OAuth 登录仍在应用内 **Pi CLI** 完成。
 
-## 构建
+## 下载与自动化构建
+
+GitHub Actions 在 Apple Silicon 与 Intel 两种运行器上运行单元测试；推送到 `main` 后还会构建 Release 应用包，可在该次运行的 Artifacts 中下载（保留 7 天）。
+
+打 `v*` 标签会触发发布工作流，为两种架构分别生成 `Pi-Desktop-<版本>-<架构>.zip` 与对应 `.sha256`，并附到 GitHub Release：
+
+```sh
+unzip Pi-Desktop-0.1.0-arm64.zip
+xattr -dr com.apple.quarantine "Pi Desktop.app"   # 未公证，首次打开前按需执行
+open "Pi Desktop.app"
+```
+
+构建使用本机临时签名，未经 Developer ID 签名与 Apple 公证，Gatekeeper 可能要求在「系统设置 → 隐私与安全性」中放行。
+
+## 从源码构建
 
 ```sh
 ./scripts/build-app.sh          # Release，产物在 build/Pi Desktop.app

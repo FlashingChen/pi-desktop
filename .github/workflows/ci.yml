@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Run unit tests
+        run: swift test --build-system native
+
+  package:
+    name: Package app (arm64)
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-arm64-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-arm64-
+
+      - name: Build app bundle
+        run: PI_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)" ./scripts/build-app.sh
+
+      - name: Verify bundle
+        run: |
+          test -x "build/Pi Desktop.app/Contents/MacOS/PiDesktop"
+          codesign --verify --deep --strict "build/Pi Desktop.app"
+          lipo -archs "build/Pi Desktop.app/Contents/MacOS/PiDesktop"
+
+      - name: Package zip
+        run: ditto -c -k --keepParent "build/Pi Desktop.app" Pi-Desktop-ci-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pi-Desktop-ci-arm64
+          path: Pi-Desktop-ci-arm64.zip
+          retention-days: 7

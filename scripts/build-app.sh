@@ -2,8 +2,12 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 configuration="${1:-release}"
-swift build --build-system native -c "$configuration"
-bin_dir="$(swift build --build-system native -c "$configuration" --show-bin-path)"
+build_system="${PI_BUILD_SYSTEM:-native}"
+version="${PI_VERSION:-}"
+build_number="${PI_BUILD_NUMBER:-}"
+
+swift build --build-system "$build_system" -c "$configuration"
+bin_dir="$(swift build --build-system "$build_system" -c "$configuration" --show-bin-path)"
 mkdir -p build
 stage="$(mktemp -d "$PWD/build/package.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
@@ -12,6 +16,13 @@ final_app="$PWD/build/Pi Desktop.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$stage/AppIcon.iconset"
 cp "$bin_dir/PiDesktop" "$app_dir/Contents/MacOS/PiDesktop"
 cp Resources/Info.plist "$app_dir/Contents/Info.plist"
+plist="$app_dir/Contents/Info.plist"
+if [[ -n "$version" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$plist"
+fi
+if [[ -n "$build_number" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$plist"
+fi
 swift scripts/make-icon.swift "$stage/AppIcon.iconset"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$app_dir/Contents/Resources/AppIcon.icns"
 # Standard macOS resource placement; the terminal uses the default CoreText renderer.
@@ -21,4 +32,4 @@ codesign --force --deep --sign - "$app_dir"
 codesign --verify --deep --strict "$app_dir"
 if [[ -e "$final_app" ]]; then mv "$final_app" "$stage/previous.app"; fi
 mv "$app_dir" "$final_app"
-echo "Built: $final_app"
+echo "Built: $final_app ($(lipo -archs "$final_app/Contents/MacOS/PiDesktop" 2>/dev/null || echo unknown), ${version:-bundled version})"
